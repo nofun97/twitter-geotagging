@@ -4,7 +4,6 @@ import re
 from textblob import TextBlob, Word
 from nltk.tokenize import TweetTokenizer
 from collections import defaultdict
-from sklearn.naive_bayes import MultinomialNB
 from nltk.corpus import stopwords
 
 def openTSV(filepath: str):
@@ -37,8 +36,6 @@ def extractKeywords(tweet: str):
 def preprocess(trainFilePath: str, storeFilePath: str="C:\\Users\\novan\\OneDrive\\Desktop\\CODE\\twitter-geotagging\\data\\preprocessed3.csv"):
     st = open(storeFilePath, 'w')
     df = openTSV(trainFilePath)
-    # freq = defaultdict(lambda: defaultdict(int))
-    # classes = []
     st.write('ID\tLocation\tkeywords\n')
     for i, row in df.iterrows():
         keywords = extractKeywords(row[2])
@@ -62,14 +59,15 @@ def deleteUnnecessaryWord(h):
             x[k1] = h[k1]
     return x
 
-def serializedPreprocessedData():
-    fp = open("C:\\Users\\novan\\OneDrive\\Desktop\\CODE\\twitter-geotagging\\data\\preprocessed3.csv", 'r')
-    a = open("C:\\Users\\novan\\OneDrive\\Desktop\\CODE\\twitter-geotagging\\data\\further2.csv", 'w')
+def serializedPreprocessedData(tokenizedCSV: str, furtherPreprocess: str):
+    fp = open(tokenizedCSV, 'r')
+    a = open(furtherPreprocess, 'w')
     freq = defaultdict(lambda: defaultdict(int))
     for i in fp:
         x = i[:-1]
         x = x.split('\t')
         keys = x[2].split(',')
+
         for j in keys:
             freq[j][x[0]] += 1
 
@@ -91,8 +89,12 @@ def serializedPreprocessedData():
 
 # %%
 filepath = "C:\\Users\\novan\\OneDrive\\Desktop\\CODE\\twitter-geotagging\\data\\train-raw.tsv"
-preprocess(filepath)
-serializedPreprocessedData()
+tokenizedCSV = "C:\\Users\\novan\\OneDrive\\Desktop\\CODE\\twitter-geotagging\\data\\preprocessed4.csv"
+furtherPreprocess = "C:\\Users\\novan\\OneDrive\\Desktop\\CODE\\twitter-geotagging\\data\\further2.csv"
+    
+# %%
+preprocess(filepath, tokenizedCSV)
+serializedPreprocessedData(tokenizedCSV, furtherPreprocess)
 
 # %%
 from copy import copy
@@ -135,22 +137,65 @@ def fitTrainData(data: str):
 
 
 # %%
-from sklearn.naive_bayes import MultinomialNB
+from sklearn.naive_bayes import MultinomialNB, BernoulliNB, GaussianNB
+from sklearn.tree import DecisionTreeClassifier
 # from sklearn.feature_extraction import DictVectorizer
-preprocessed = "C:\\Users\\novan\\OneDrive\\Desktop\\CODE\\twitter-geotagging\\data\\further2.csv"
-_, X_test, y_test = fitTestData("C:\\Users\\novan\\OneDrive\\Desktop\\CODE\\twitter-geotagging\\data\\dev-raw.tsv", preprocessed)
-X_train, y_train = fitTrainData(preprocessed)
-classifier = MultinomialNB()
-head1 = sorted(list(X_train.columns.values))
-head2 = sorted(list(X_test.columns.values))
-if head1 != head2:
-    print("What the fuck")
+_, X_test, y_test = fitTestData("C:\\Users\\novan\\OneDrive\\Desktop\\CODE\\twitter-geotagging\\data\\dev-raw.tsv", furtherPreprocess)
+X_train, y_train = fitTrainData(furtherPreprocess)
+classifiers = {"MultinomialNB": MultinomialNB(), "DecisionTree": DecisionTreeClassifier(), "BernoulliNB": BernoulliNB(), "GaussianNB": GaussianNB()}
+for i in classifiers:
+    classifiers[i].fit(X_train, y_train)
+    score = classifiers[i].score(X_test, y_test)
+    print("Classifier: {}, Score: {}\n".format(i, score))
 
-classifier.fit(X_train, y_train)
-score = classifier.score(X_test, y_test)
-print("Score: {}\n".format(score))
+# %% [markdown]
+# ## Results
+# 1. Classifier: MultinomialNB, Score: 0.30338192732340014
+# 2. Classifier: DecisionTree, Score: 0.30348911994854755, Kaggle Score: 0.28988
+# 3. Classifier: BernoulliNB, Score: 0.30710687104727197, Kaggle Score: 0.29247
+# 4. Classifier: GaussianNB, Score: 0.14060992603708866
+
 
 # %%
-ids, X_actualTest, _ = fitTestData("C:\\Users\\novan\\OneDrive\\Desktop\\CODE\\twitter-geotagging\\data\\test-raw.tsv", preprocessed)
-predict = classifier.predict(X_actualTest)
-pd.DataFrame({"Id": ids, "Class": list(predict)}).to_csv("C:\\Users\\novan\\OneDrive\\Desktop\\CODE\\twitter-geotagging\\data\\result.csv", index=False)
+ids, X_actualTest, _ = fitTestData("C:\\Users\\novan\\OneDrive\\Desktop\\CODE\\twitter-geotagging\\data\\test-raw.tsv", furtherPreprocess)
+predict = classifiers["DecisionTree"].predict(X_actualTest)
+pd.DataFrame({"Id": ids, "Class": list(predict)}).to_csv("C:\\Users\\novan\\OneDrive\\Desktop\\CODE\\twitter-geotagging\\data\\result5.csv", index=False)
+
+# %%
+import tensorflow as tf
+from sklearn.preprocessing import LabelEncoder
+
+gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.5)
+sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
+
+# %%
+_, X_test, y_test = fitTestData("C:\\Users\\novan\\OneDrive\\Desktop\\CODE\\twitter-geotagging\\data\\dev-raw.tsv", furtherPreprocess)
+X_train, y_train = fitTrainData(furtherPreprocess)
+
+X_train = X_train.astype('int')
+X_test = X_test.astype('int')
+
+encoder = LabelEncoder()
+encoder.fit(y_train)
+encodedTrain = encoder.transform(y_train)
+encodedTest = encoder.transform(y_test)
+
+kerasTrain = tf.keras.utils.to_categorical(encodedTrain)
+kerasTest = tf.keras.utils.to_categorical(encodedTest)
+
+nCols = X_train.shape[1]
+
+#%%
+model = tf.keras.Sequential()
+model.add(tf.keras.layers.Dense(200, activation='relu', input_shape=(nCols,)))
+model.add(tf.keras.layers.Dense(200, activation='relu'))
+model.add(tf.keras.layers.Dense(200, activation='relu'))
+model.add(tf.keras.layers.Dense(1))
+
+model.compile(optimizer="adam", loss="mean_squared_error", metrics=["accuracy"])
+
+early_stopping_monitor = tf.keras.callbacks.EarlyStopping(patience=3)
+
+model.fit(X_train, kerasTrain, epochs=30, callbacks=[early_stopping_monitor])
+test_loss, test_acc = model.evaluate(X_test, kerasTest)
+print("Tensorflow Keras, Accuracy: {}\n".format(test_acc))
